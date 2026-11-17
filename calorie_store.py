@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import math
 import sqlite3
 from datetime import date, timedelta
 from pathlib import Path
@@ -41,6 +42,91 @@ def initialize_database(db_path: str | Path = DEFAULT_DB_PATH) -> None:
             ON calorie_entries (entry_date, id)
             """
         )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS workout_entries (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                entry_date TEXT NOT NULL,
+                exercise TEXT NOT NULL,
+                sets INTEGER NOT NULL CHECK (sets > 0),
+                reps INTEGER NOT NULL CHECK (reps > 0),
+                weight REAL NOT NULL CHECK (weight >= 0),
+                weight_unit TEXT NOT NULL CHECK (weight_unit IN ('kg', 'lb')),
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_workout_entries_date
+            ON workout_entries (entry_date, id)
+            """
+        )
+
+
+def add_workout(
+    entry_date: date,
+    exercise: str,
+    sets: int,
+    reps: int,
+    weight: float,
+    weight_unit: Literal["kg", "lb"],
+    db_path: str | Path = DEFAULT_DB_PATH,
+) -> int:
+    """Save a strength-training exercise and return its database ID."""
+    clean_exercise = exercise.strip()
+    if not clean_exercise:
+        raise ValueError("Exercise must not be blank.")
+    if isinstance(sets, bool) or not isinstance(sets, int) or sets <= 0:
+        raise ValueError("Sets must be a positive whole number.")
+    if isinstance(reps, bool) or not isinstance(reps, int) or reps <= 0:
+        raise ValueError("Reps must be a positive whole number.")
+    if isinstance(weight, bool) or not math.isfinite(weight) or weight < 0:
+        raise ValueError("Weight cannot be negative.")
+    if weight_unit not in ("kg", "lb"):
+        raise ValueError("Weight unit must be 'kg' or 'lb'.")
+
+    with _connect(db_path) as connection:
+        cursor = connection.execute(
+            """
+            INSERT INTO workout_entries
+                (entry_date, exercise, sets, reps, weight, weight_unit)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                entry_date.isoformat(),
+                clean_exercise,
+                sets,
+                reps,
+                weight,
+                weight_unit,
+            ),
+        )
+        return int(cursor.lastrowid)
+
+
+def get_workouts(
+    entry_date: date, db_path: str | Path = DEFAULT_DB_PATH
+) -> list[dict[str, object]]:
+    with _connect(db_path) as connection:
+        rows = connection.execute(
+            """
+            SELECT id, entry_date, exercise, sets, reps, weight, weight_unit, created_at
+            FROM workout_entries
+            WHERE entry_date = ?
+            ORDER BY id DESC
+            """,
+            (entry_date.isoformat(),),
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def delete_workout(workout_id: int, db_path: str | Path = DEFAULT_DB_PATH) -> bool:
+    with _connect(db_path) as connection:
+        cursor = connection.execute(
+            "DELETE FROM workout_entries WHERE id = ?", (workout_id,)
+        )
+        return cursor.rowcount == 1
 
 
 def add_entry(

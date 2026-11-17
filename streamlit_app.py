@@ -6,11 +6,14 @@ import streamlit as st
 from calorie_estimates import ACTIVITY_MET, estimate_activity_calories
 from calorie_store import (
     add_entry,
+    add_workout,
     delete_entry,
+    delete_workout,
     get_daily_history,
     get_daily_totals,
     get_database_path,
     get_entries,
+    get_workouts,
     initialize_database,
 )
 from nutrition_lookup import FoodLookupError, calories_for_amount, lookup_product
@@ -171,6 +174,127 @@ with st.container(border=True):
             st.session_state.pop("activity_estimate", None)
             st.success("Activity estimate saved.")
             st.rerun()
+
+with st.container(border=True):
+    st.subheader("Strength workout log")
+    st.caption(
+        "Record exercises, sets, reps, and load. This is training history; "
+        "strength workouts are not automatically converted into calories burned."
+    )
+    with st.form("strength_workout_log", clear_on_submit=True):
+        exercise = st.text_input(
+            "Exercise",
+            placeholder="For example, barbell squat",
+            max_chars=120,
+        )
+        sets, reps = st.columns(2)
+        with sets:
+            set_count = st.number_input(
+                "Sets",
+                min_value=1,
+                max_value=100,
+                value=3,
+                step=1,
+            )
+        with reps:
+            rep_count = st.number_input(
+                "Reps per set",
+                min_value=1,
+                max_value=1_000,
+                value=10,
+                step=1,
+            )
+        load_col, unit_col = st.columns(2)
+        with load_col:
+            load = st.number_input(
+                "Load (use 0 for bodyweight)",
+                min_value=0.0,
+                max_value=2_000.0,
+                value=0.0,
+                step=2.5,
+            )
+        with unit_col:
+            load_unit = st.selectbox("Load unit", options=["kg", "lb"])
+        workout_submitted = st.form_submit_button(
+            "Save workout",
+            type="primary",
+            icon=":material/fitness_center:",
+        )
+
+    if workout_submitted:
+        if not exercise.strip():
+            st.error("Enter an exercise name before saving.")
+        else:
+            add_workout(
+                selected_date,
+                exercise,
+                int(set_count),
+                int(rep_count),
+                load,
+                load_unit,  # type: ignore[arg-type]
+                DB_PATH,
+            )
+            st.success("Workout saved.")
+            st.rerun()
+
+    workouts = get_workouts(selected_date, DB_PATH)
+    if workouts:
+        workout_table = pd.DataFrame(
+            [
+                {
+                    "Exercise": workout["exercise"],
+                    "Sets": workout["sets"],
+                    "Reps / set": workout["reps"],
+                    "Load": (
+                        f"{workout['weight']:g} {workout['weight_unit']}"
+                        if workout["weight"]
+                        else "Bodyweight"
+                    ),
+                }
+                for workout in workouts
+            ]
+        )
+        st.dataframe(workout_table, hide_index=True)
+        workout_labels = {
+            int(workout["id"]): (
+                f"{workout['exercise']} · {workout['sets']} × {workout['reps']} "
+                f"(entry #{workout['id']})"
+            )
+            for workout in workouts
+        }
+        with st.expander("Remove a workout"):
+            selected_workout = st.selectbox(
+                "Workout to remove",
+                options=list(workout_labels),
+                format_func=workout_labels.__getitem__,
+                key="workout_to_remove",
+            )
+            if st.button("Delete selected workout", key="delete_workout"):
+                if delete_workout(selected_workout, DB_PATH):
+                    st.success("Workout removed.")
+                    st.rerun()
+                st.error("That workout could not be found.")
+    else:
+        st.info("No strength exercises logged for this day yet.")
+
+with st.expander("Movement tracking integrations"):
+    st.markdown(
+        """
+        **Connection status: not connected.** This prototype does not monitor
+        movement in the background or read wearable sensors.
+
+        - **Apple Watch / HealthKit:** a future iPhone app could request
+          permission to import Apple Health active-energy and workout records.
+        - **Android / Health Connect:** a future Android app could request
+          permission to import compatible activity and energy records.
+        - **Review before logging:** imported records should show their source,
+          time, and estimate so you can confirm them and avoid duplicates.
+
+        Imported active calories would still be estimates and would not include
+        all energy your body uses at rest. Workout history above is kept
+        separate from the calorie-out total unless you log a separate estimate.
+        """
+    )
 
 with st.container(border=True):
     st.subheader("Add an entry")

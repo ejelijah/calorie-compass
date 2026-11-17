@@ -13,3 +13,10 @@ def test_app_renders_dashboard_without_errors(tmp_path, monkeypatch):
         "Calories out",
         "Net for the day",
     ]
+    assert any(
+        "Strength workout log" in heading.value for heading in app.subheader
+    )
+    assert any(
+        "Movement tracking integrations" in expander.label
+        for expander in app.expander
+    )
