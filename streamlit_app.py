@@ -3,6 +3,7 @@ from datetime import date
 import pandas as pd
 import streamlit as st
 
+from calorie_estimates import ACTIVITY_MET, estimate_activity_calories
 from calorie_store import (
     add_entry,
     delete_entry,
@@ -12,6 +13,7 @@ from calorie_store import (
     get_entries,
     initialize_database,
 )
+from nutrition_lookup import FoodLookupError, calories_for_amount, lookup_product
 
 st.set_page_config(
     page_title="Neo_Cal | Daily calorie tracker",
@@ -42,6 +44,133 @@ with st.container(horizontal=True):
     st.metric("Net for the day", f"{totals['net']:,}", border=True)
 
 st.caption("Net = calories in − calories out. A negative net is shown as logged; it is not a goal.")
+
+with st.container(border=True):
+    st.subheader("Look up packaged food")
+    st.caption(
+        "Enter the barcode from a packaged product to look up its nutrition data. "
+        "Values come from Open Food Facts and may be user-submitted."
+    )
+    with st.form("food_barcode_lookup"):
+        barcode = st.text_input(
+            "Product barcode",
+            placeholder="8–14 digits on the package",
+            max_chars=14,
+        )
+        serving_grams = st.number_input(
+            "Amount eaten (grams)",
+            min_value=1.0,
+            max_value=10_000.0,
+            value=100.0,
+            step=10.0,
+        )
+        lookup_submitted = st.form_submit_button(
+            "Look up food",
+            icon=":material/search:",
+        )
+
+    if lookup_submitted:
+        st.session_state.pop("food_lookup_result", None)
+        try:
+            product = lookup_product(barcode)
+            st.session_state["food_lookup_result"] = {
+                **product,
+                "serving_grams": serving_grams,
+                "calories": calories_for_amount(
+                    product["calories_per_100g"], serving_grams
+                ),
+            }
+        except FoodLookupError as exc:
+            st.error(str(exc))
+
+    product_result = st.session_state.get("food_lookup_result")
+    if product_result:
+        brand = f" · {product_result['brand']}" if product_result["brand"] else ""
+        st.write(
+            f"**{product_result['name']}**{brand} — "
+            f"{product_result['calories']} estimated calories for "
+            f"{product_result['serving_grams']:g} g"
+        )
+        st.caption(
+            f"Database value: {product_result['calories_per_100g']:.0f} calories per 100 g. "
+            "Check the package label; serving estimates may differ."
+        )
+        if product_result["calories"] == 0:
+            st.info("This portion rounds to zero calories; increase the amount to log it.")
+        if st.button(
+            "Log this food",
+            type="primary",
+            key="log_barcode_food",
+            disabled=product_result["calories"] == 0,
+        ):
+            add_entry(
+                selected_date,
+                "in",
+                f"{product_result['name']} ({product_result['serving_grams']:g} g)",
+                max(1, product_result["calories"]),
+                DB_PATH,
+            )
+            st.session_state.pop("food_lookup_result", None)
+            st.success("Food entry saved.")
+            st.rerun()
+
+with st.container(border=True):
+    st.subheader("Estimate activity calories")
+    st.caption(
+        "This rough estimate uses activity type, duration, and body weight. "
+        "It is not a measurement from a wearable."
+    )
+    with st.form("activity_calorie_estimate"):
+        activity = st.selectbox("Activity", options=list(ACTIVITY_MET))
+        duration_minutes = st.number_input(
+            "Duration (minutes)",
+            min_value=1,
+            max_value=1_440,
+            value=30,
+            step=5,
+        )
+        weight_unit = st.selectbox("Weight unit", options=["kg", "lb"])
+        weight = st.number_input(
+            f"Body weight ({weight_unit})",
+            min_value=1.0,
+            max_value=700.0 if weight_unit == "lb" else 300.0,
+            value=150.0 if weight_unit == "lb" else 68.0,
+            step=1.0,
+        )
+        estimate_submitted = st.form_submit_button(
+            "Estimate calories",
+            icon=":material/calculate:",
+        )
+
+    if estimate_submitted:
+        weight_kg = weight / 2.20462 if weight_unit == "lb" else weight
+        estimated_calories = estimate_activity_calories(
+            weight_kg, int(duration_minutes), ACTIVITY_MET[activity]
+        )
+        st.session_state["activity_estimate"] = {
+            "activity": activity,
+            "duration_minutes": int(duration_minutes),
+            "calories": estimated_calories,
+        }
+
+    activity_result = st.session_state.get("activity_estimate")
+    if activity_result:
+        st.metric(
+            "Estimated activity calories above rest",
+            f"{activity_result['calories']:,} cal",
+        )
+        if st.button("Log this activity", type="primary", key="log_activity"):
+            add_entry(
+                selected_date,
+                "out",
+                f"{activity_result['activity']} · "
+                f"{activity_result['duration_minutes']} min (estimate)",
+                max(1, activity_result["calories"]),
+                DB_PATH,
+            )
+            st.session_state.pop("activity_estimate", None)
+            st.success("Activity estimate saved.")
+            st.rerun()
 
 with st.container(border=True):
     st.subheader("Add an entry")
